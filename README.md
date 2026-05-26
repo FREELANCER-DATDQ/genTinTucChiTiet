@@ -254,8 +254,8 @@ docker compose run --rm vnexpress-morning --slot 0700 --skip-render
 ## Upload Status
 
 - **Facebook Page Reels**: publish public ngay lập tức.
-- **YouTube**: upload với `privacyStatus=private`.
-- **TikTok**: dùng `SELF_ONLY`; thất bại nếu tài khoản creator không hỗ trợ privacy option đó.
+- **YouTube**: upload với `privacyStatus=public`.
+- **TikTok**: mặc định dùng `PUBLIC_TO_EVERYONE`; có thể đổi bằng `TIKTOK_PRIVACY_LEVEL`. Thất bại nếu tài khoản/app không trả privacy option đó.
 - Nếu một nền tảng lỗi, các nền tảng còn lại vẫn tiếp tục; lỗi được ghi vào `upload-errors.json`.
 
 ## Notes

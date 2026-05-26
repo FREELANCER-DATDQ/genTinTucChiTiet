@@ -3,6 +3,13 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const GRAPH_VERSION = "v23.0";
+const TIKTOK_DEFAULT_PRIVACY_LEVEL = "PUBLIC_TO_EVERYONE";
+const TIKTOK_PRIVACY_LEVELS = new Set([
+  "PUBLIC_TO_EVERYONE",
+  "MUTUAL_FOLLOW_FRIENDS",
+  "FOLLOWER_OF_CREATOR",
+  "SELF_ONLY"
+]);
 const CAPTION =
   "10 tin nổi bật hôm nay. Theo dõi @tintucchatluong để cập nhật tin tức nhanh mỗi sáng và tối. #tintuc #vnexpress #tintucchatluong";
 
@@ -190,15 +197,19 @@ async function uploadTikTok({ env, caption, videoPath, dryRun }) {
   const accessToken = await refreshTikTokAccessToken(env);
   const creator = await tiktokPost("https://open.tiktokapis.com/v2/post/publish/creator_info/query/", accessToken, {});
   const options = creator.data?.privacy_level_options || [];
-  if (!options.includes("SELF_ONLY")) {
-    throw new Error(`TikTok creator privacy options do not include SELF_ONLY: ${JSON.stringify(options)}`);
+  const privacyLevel = env.TIKTOK_PRIVACY_LEVEL || TIKTOK_DEFAULT_PRIVACY_LEVEL;
+  if (!TIKTOK_PRIVACY_LEVELS.has(privacyLevel)) {
+    throw new Error(`Invalid TIKTOK_PRIVACY_LEVEL ${privacyLevel}; expected one of ${JSON.stringify([...TIKTOK_PRIVACY_LEVELS])}`);
+  }
+  if (!options.includes(privacyLevel)) {
+    throw new Error(`TikTok creator privacy options do not include ${privacyLevel}: ${JSON.stringify(options)}`);
   }
 
   const videoSize = (await stat(videoPath)).size;
   const init = await tiktokPost("https://open.tiktokapis.com/v2/post/publish/video/init/", accessToken, {
     post_info: {
       title: caption,
-      privacy_level: "SELF_ONLY",
+      privacy_level: privacyLevel,
       disable_duet: false,
       disable_comment: false,
       disable_stitch: false,
@@ -232,7 +243,7 @@ async function uploadTikTok({ env, caption, videoPath, dryRun }) {
 
   return {
     status: "uploaded",
-    privacyStatus: "SELF_ONLY",
+    privacyStatus: privacyLevel,
     publishId
   };
 }
