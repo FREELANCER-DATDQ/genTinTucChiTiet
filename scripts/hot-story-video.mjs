@@ -33,6 +33,7 @@ const CANDIDATE_COUNT = envNumber("HOT_STORY_CANDIDATE_COUNT", 12);
 const TARGET_DURATION = envNumber("HOT_STORY_DURATION_TARGET", 75);
 const MIN_DURATION = 60;
 const MAX_DURATION = 90;
+const TRANSITION_SECONDS = 0.55;
 const DEDUPE_STATE = process.env.VNEXPRESS_DEDUPE_STATE || path.resolve(".vnexpress-state", "seen-news.json");
 const DEDUPE_UPDATED_MARKER = process.env.VNEXPRESS_DEDUPE_UPDATED_MARKER
   || path.join(path.dirname(DEDUPE_STATE), "updated.json");
@@ -527,7 +528,7 @@ function extractParagraphs(html = "") {
       values.push(text);
     }
   }
-  return unique(values).slice(0, 8);
+  return unique(values).slice(0, 30);
 }
 
 function extractArticleDetails(html = "", link = "") {
@@ -745,6 +746,24 @@ function limitWords(value, maxWords) {
   return `${words.slice(0, maxWords).join(" ")}...`;
 }
 
+function limitTextByWords(value, maxWords) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length <= maxWords) return text;
+  const sentences = text.match(/[^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$/g) || [text];
+  const kept = [];
+  let count = 0;
+  for (const sentence of sentences) {
+    const sentenceWords = sentence.split(/\s+/).filter(Boolean).length;
+    if (kept.length && count + sentenceWords > maxWords) break;
+    kept.push(sentence.trim());
+    count += sentenceWords;
+    if (count >= maxWords) break;
+  }
+  if (kept.length) return kept.join(" ").trim();
+  return words.slice(0, maxWords).join(" ").replace(/[,.!?;:]*$/, ".");
+}
+
 function buildFallbackScenes(item) {
   const title = item.hook || item.title;
   const summary = item.summary || title;
@@ -809,10 +828,21 @@ function fallbackSelection(items, reason = "Gemini unavailable") {
     reason,
     angle: selected?.summary || selected?.title || "",
     videoTitle: limitWords(selected?.title || "Tin nong trong ngay", 14),
+    voiceoverScript: fallbackVoiceoverScript(selected),
     caption: `${selected?.title || "Tin nong trong ngay"}\n\nNguon: ${selected?.sourceName || PRIMARY_SOURCE.name}\n${selected?.link || ""}\n\n#TinTuc #VnExpress #Shorts`,
     hashtags: ["#TinTuc", "#VnExpress", "#Shorts"],
     scenes: selected ? buildFallbackScenes(selected) : []
   };
+}
+
+function fallbackVoiceoverScript(item) {
+  if (!item) return "Cap nhat tin nong trong ngay.";
+  const paragraphs = String(item.articleText || "").split(/\n+/).filter(Boolean);
+  return [
+    item.title,
+    item.summary,
+    ...paragraphs.slice(0, 8)
+  ].filter(Boolean).join("\n\n");
 }
 
 function geminiSchema() {
@@ -824,6 +854,7 @@ function geminiSchema() {
       reason: { type: "string", description: "Ly do chon tin, toi da 2 cau." },
       angle: { type: "string", description: "Goc ke chuyen cho video chi tiet." },
       videoTitle: { type: "string", description: "Tieu de upload ngan gon, hap dan, khong qua 90 ky tu." },
+      voiceoverScript: { type: "string", description: "Ban doc voiceover tieng Viet, tom tat day du noi dung bai bao sau khi doc toan bo articleText, bat buoc khoang 170-220 tu." },
       caption: { type: "string", description: "Caption tieng Viet co nguon va hashtag." },
       hashtags: {
         type: "array",
@@ -850,7 +881,7 @@ function geminiSchema() {
         }
       }
     },
-    required: ["selectedId", "hotScore", "reason", "angle", "videoTitle", "caption", "hashtags", "scenes"]
+    required: ["selectedId", "hotScore", "reason", "angle", "videoTitle", "voiceoverScript", "caption", "hashtags", "scenes"]
   };
 }
 
@@ -863,7 +894,7 @@ function geminiPrompt(items) {
     category: item.category,
     pubDate: item.pubDate,
     link: item.link,
-    articleText: limitWords(item.articleText, 220),
+    articleText: limitWords(item.articleText, 1400),
     mediaAvailable: {
       total: item.mediaCandidates?.length || 0,
       images: item.mediaCandidates?.filter((candidate) => candidate.type === "image").length || 0,
@@ -874,9 +905,11 @@ function geminiPrompt(items) {
 
 Tieu chi chon: moi, tac dong rong, de gay chu y, co so lieu/nhan vat/su kien manh, phu hop Shorts/Reels/TikTok. Khong chon tin chi vi gay soc neu thieu tac dong.
 
-Sau khi chon, viet kich ban 6-7 canh. Moi canh phai tom tat lai bang loi cua minh, khong copy nguyen van dai tu bai bao. Uu tien noi dung chinh xac voi nguon da cung cap. Caption phai co nguon va link cua tin duoc chon.
+Sau khi chon, doc ky toan bo articleText cua tin duoc chon roi viet voiceoverScript rieng cho giong doc. VoiceoverScript phai tom tat day du dien bien, nguyen nhan/boi canh, chi tiet dang chu y va tinh trang tiep theo neu co. Viet nhu mot ban tin doc lien mach 60-90 giay, bat buoc khoang 170-220 tu, khong chia canh, khong copy nguyen van dai tu bai bao, khong them thong tin ngoai nguon.
 
-Moi canh chon mediaIndex tu media goc da co san cua bai. Neu co video, uu tien dung video cho canh mo dau hoac canh dien bien manh. Neu so media it hon so canh, co the lap lai mediaIndex. Khong yeu cau tao anh moi.
+Sau do viet kich ban 6-7 canh de dieu khien media. Moi canh chi can tom tat ngan bang loi cua minh. Uu tien noi dung chinh xac voi nguon da cung cap. Caption phai co nguon va link cua tin duoc chon.
+
+Moi canh chon mediaIndex tu media goc da co san cua bai. Neu co video, mediaIndex 0 se la video dau tien; uu tien dung video cho canh mo dau va cac canh dien bien manh. Neu so media it hon so canh, co the lap lai mediaIndex. Khong yeu cau tao anh moi.
 
 Danh sach ung vien:
 ${JSON.stringify(candidates, null, 2)}`;
@@ -951,6 +984,7 @@ function normalizeSelection(selection) {
     ...selection,
     hotScore: Math.max(0, Math.min(100, Number(selection.hotScore) || 0)),
     videoTitle: limitWords(selection.videoTitle || "Tin nong trong ngay", 16),
+    voiceoverScript: limitTextByWords(selection.voiceoverScript, 240),
     caption: selection.caption || "",
     hashtags: Array.isArray(selection.hashtags) ? selection.hashtags.slice(0, 8) : ["#TinTuc", "#Shorts"],
     scenes: normalizedScenes.length >= 6 ? normalizedScenes : []
@@ -1145,6 +1179,13 @@ async function downloadStoryMedia(story, assetDir) {
   return { media, errors };
 }
 
+function prioritizeVideoMedia(media = []) {
+  return [
+    ...media.filter((item) => item.type === "video"),
+    ...media.filter((item) => item.type !== "video")
+  ];
+}
+
 function audioDurationSeconds(filePath) {
   if (!commandExists("ffprobe")) return null;
   const result = spawnSync("ffprobe", [
@@ -1195,28 +1236,34 @@ function pythonCommand() {
   return "python";
 }
 
-async function synthesizeSceneTts(scenes, assetDir) {
-  if (!HOOK_TTS_ENABLED) return scenes;
+function storyNarrationText(story, selection, scenes) {
+  if (selection?.voiceoverScript) return limitTextByWords(selection.voiceoverScript, 240);
+  return [
+    story.hook || story.title,
+    story.summary,
+    story.articleText,
+    ...scenes.map((scene) => scene.narration || scene.body || scene.headline)
+  ].filter(Boolean).join("\n\n");
+}
+
+async function synthesizeStoryTts(story, selection, scenes, assetDir, maxSeconds) {
+  if (!HOOK_TTS_ENABLED) return { scenes, narrationAudio: null };
   if (HOOK_TTS_PROVIDER !== "vieneu") {
     console.warn(`[tts] HOOK_TTS_PROVIDER=${HOOK_TTS_PROVIDER} chua duoc ho tro. Bo qua TTS.`);
-    return scenes;
+    return { scenes, narrationAudio: null };
   }
   await mkdir(assetDir, { recursive: true });
   const py = pythonCommand();
   if (!commandExists(py) || !existsSync(VIENEU_TTS_SCRIPT)) {
     console.warn(`[tts] Khong tim thay Python hoac ${VIENEU_TTS_SCRIPT}. Bo qua TTS.`);
-    return scenes;
+    return { scenes, narrationAudio: null };
   }
 
-  const jobs = scenes.map((scene, index) => ({
-    scene,
-    filename: `scene-${String(index + 1).padStart(2, "0")}.wav`,
-    output: path.join(assetDir, `scene-${String(index + 1).padStart(2, "0")}.wav`),
-    text: scene.narration || scene.body || scene.headline
-  }));
-  const manifestPath = path.join(assetDir, "scene-tts-input.json");
+  const filename = "story-narration.wav";
+  const output = path.join(assetDir, filename);
+  const manifestPath = path.join(assetDir, "story-tts-input.json");
   await writeFile(manifestPath, JSON.stringify(
-    jobs.map((job) => ({ text: job.text, output: job.output })),
+    [{ text: storyNarrationText(story, selection, scenes), output }],
     null,
     2
   ), "utf8");
@@ -1234,18 +1281,18 @@ async function synthesizeSceneTts(scenes, assetDir) {
   const result = spawnSync(py, ttsArgs, { encoding: "utf8", shell: false });
   if (result.status !== 0) {
     console.warn(`[tts] Khong tao duoc batch voice: ${(result.stderr || result.stdout || "").trim()}`);
-    return scenes;
+    return { scenes, narrationAudio: null };
   }
 
-  return Promise.all(jobs.map(async ({ scene, filename, output }) => {
-    if (!existsSync(output)) return scene;
-    const duration = await fitAudioDuration(output, Math.max(1, scene.durationSeconds - 0.6));
-    return {
-      ...scene,
-      audio: `assets/${filename}`,
-      audioDurationSeconds: duration ? Number(duration.toFixed(3)) : null
-    };
-  }));
+  if (!existsSync(output)) return { scenes, narrationAudio: null };
+  const duration = await fitAudioDuration(output, Math.max(1, maxSeconds - 0.6));
+  return {
+    scenes,
+    narrationAudio: {
+      src: `assets/${filename}`,
+      durationSeconds: duration ? Number(duration.toFixed(3)) : null
+    }
+  };
 }
 
 function escapeHtml(value = "") {
@@ -1280,9 +1327,9 @@ function wordSpans(value = "") {
 }
 
 function formatPubDate(pubDate) {
-  if (!pubDate) return "Tin moi";
+  if (!pubDate) return "Tin mới";
   const date = new Date(pubDate);
-  if (Number.isNaN(date.getTime())) return "Tin moi";
+  if (Number.isNaN(date.getTime())) return "Tin mới";
   return new Intl.DateTimeFormat("vi-VN", {
     timeZone: "Asia/Bangkok",
     day: "2-digit",
@@ -1312,7 +1359,7 @@ function renderStageVideoElement(media, scene) {
   return `<video id="scene-video-${String(scene.index).padStart(2, "0")}" class="scene-video" src="${escapeHtml(media.localMedia)}"${poster} muted playsinline preload="auto" loop data-start="${scene.startSeconds}" data-duration="${scene.durationSeconds}"></video>`;
 }
 
-function renderComposition({ story, selection, scenes, media, totalSeconds }) {
+function renderComposition({ story, selection, scenes, media, totalSeconds, narrationAudio }) {
   const sceneMedia = scenes.map((scene, index) => ({
     scene,
     index,
@@ -1323,34 +1370,20 @@ function renderComposition({ story, selection, scenes, media, totalSeconds }) {
     .filter(Boolean)
     .join("\n    ");
   const sceneHtml = sceneMedia.map(({ scene, index, selectedMedia }) => {
-    const titleSize = titleFontSize(scene.headline);
-    const bodySize = bodyFontSize(scene.body);
     const hasMedia = Boolean(selectedMedia?.localMedia);
     return `
       <section id="scene-${String(scene.index).padStart(2, "0")}" class="clip scene ${hasMedia ? "has-media" : "no-media"} ${selectedMedia?.type === "video" ? "has-video" : ""}" data-start="${scene.startSeconds}" data-duration="${scene.durationSeconds}" style="--i:${index};">
         ${renderImageElement(selectedMedia)}
         <div class="fallback-bg"></div>
-        <div class="vignette"></div>
-        <div class="scanline"></div>
-        <div class="topbar">
-          <span>${escapeHtml(scene.label)}</span>
-          <strong>${String(scene.index).padStart(2, "0")} / ${scenes.length}</strong>
-        </div>
-        <div class="content">
-          <p class="source">${escapeHtml(story.sourceName)} • ${escapeHtml(formatPubDate(story.pubDate))}</p>
-          <h1 style="font-size:${titleSize}px">${wordSpans(scene.headline)}</h1>
-          <p class="body" style="font-size:${bodySize}px">${escapeHtml(scene.body)}</p>
-        </div>
       </section>`;
   }).join("\n");
-  const hasVoice = scenes.some((scene) => scene.audio);
+  const hasVoice = Boolean(narrationAudio?.src);
   const backgroundVolume = hasVoice ? BACKGROUND_VOLUME_WITH_TTS : BACKGROUND_VOLUME;
-  const audioHtml = scenes.map((scene) => {
-    if (!scene.audio) return "";
-    const duration = Math.max(0.1, Math.min(scene.audioDurationSeconds || scene.durationSeconds, scene.durationSeconds - 0.35));
-    return `<audio id="scene-audio-${String(scene.index).padStart(2, "0")}" class="scene-audio" data-start="${scene.startSeconds + 0.35}" data-duration="${duration}" data-track-index="20" data-volume="${HOOK_TTS_VOLUME}" src="${escapeHtml(scene.audio)}"></audio>`;
-  }).filter(Boolean).join("\n    ");
+  const audioHtml = narrationAudio?.src
+    ? `<audio id="story-narration" data-start="0.25" data-duration="${Math.max(0.1, Math.min(narrationAudio.durationSeconds || totalSeconds, totalSeconds - 0.35))}" data-track-index="20" data-volume="${HOOK_TTS_VOLUME}" src="${escapeHtml(narrationAudio.src)}"></audio>`
+    : "";
   const outroStart = totalSeconds - OUTRO_SECONDS;
+  const storyTitle = limitWords(story.title || selection.videoTitle, 18);
 
   return `<!doctype html>
 <html lang="vi">
@@ -1365,22 +1398,22 @@ function renderComposition({ story, selection, scenes, media, totalSeconds }) {
     * { box-sizing: border-box; }
     body { margin: 0; width: ${WIDTH}px; height: ${HEIGHT}px; overflow: hidden; background: #050607; font-family: Arial, "Helvetica Neue", sans-serif; }
     #stage { position: relative; width: ${WIDTH}px; height: ${HEIGHT}px; overflow: hidden; background: #050607; }
-    .scene-video { position: absolute; inset: -7%; width: 114%; height: 114%; object-fit: cover; filter: saturate(1.08) contrast(1.08) brightness(.82); transform: scale(1.02); opacity: 0; z-index: 0; }
-    .scene { position: absolute; inset: 0; opacity: 0; overflow: hidden; background: #050607; z-index: 1; }
-    .scene.has-video { background: transparent; }
-    .bg-photo { position: absolute; inset: -7%; width: 114%; height: 114%; object-fit: cover; filter: saturate(1.08) contrast(1.08) brightness(.82); transform: scale(1.02); }
-    .fallback-bg { position: absolute; inset: 0; background: radial-gradient(circle at 18% 16%, rgba(230,6,19,.55), transparent 33%), radial-gradient(circle at 86% 70%, rgba(255,210,48,.28), transparent 34%), linear-gradient(145deg, #080808, #171717 46%, #050607); }
-    .has-media .fallback-bg { opacity: .12; mix-blend-mode: screen; }
-    .vignette { position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.72), rgba(0,0,0,.28) 36%, rgba(0,0,0,.78)), linear-gradient(90deg, rgba(0,0,0,.74), rgba(0,0,0,.12) 58%, rgba(0,0,0,.54)); }
-    .scanline { position: absolute; left: 0; right: 0; bottom: 0; height: 18px; background: #e30613; box-shadow: 0 -18px 60px rgba(227,6,19,.32); transform-origin: left center; }
-    .topbar { position: absolute; left: 54px; right: 54px; top: 54px; display: flex; justify-content: space-between; align-items: center; color: #fff; font-weight: 950; text-shadow: 0 5px 22px rgba(0,0,0,.78); }
-    .topbar span { display: inline-flex; align-items: center; min-height: 58px; padding: 0 22px; background: #e30613; color: #fff; font-size: 30px; letter-spacing: 0; box-shadow: 10px 10px 0 rgba(0,0,0,.45); }
-    .topbar strong { font-size: 31px; color: rgba(255,255,255,.9); }
-    .content { position: absolute; left: 58px; right: 58px; top: 170px; bottom: 210px; display: flex; flex-direction: column; justify-content: center; gap: 34px; }
-    .source { margin: 0; color: #fff46b; font-size: 30px; font-weight: 950; text-transform: uppercase; text-shadow: 0 6px 22px rgba(0,0,0,.82); }
-    h1 { margin: 0; max-width: 960px; color: #fff; line-height: 1.02; font-weight: 950; letter-spacing: 0; text-wrap: balance; text-shadow: 0 8px 34px rgba(0,0,0,.86), 0 0 18px rgba(227,6,19,.48); }
-    h1 span { display: inline-block; transform-origin: 50% 80%; }
-    .body { margin: 0; max-width: 900px; color: #f3f6f9; line-height: 1.28; font-weight: 850; text-align: left; text-shadow: 0 6px 26px rgba(0,0,0,.82); }
+    .channel-panel { position: absolute; left: 0; width: 100%; height: 640px; z-index: 5; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 54px 72px; overflow: hidden; }
+    .channel-panel.top { top: 0; background: linear-gradient(180deg, #101217 0%, #0b0d10 100%); border-bottom: 14px solid #e30613; }
+    .channel-panel.bottom { bottom: 0; background: linear-gradient(180deg, #0b0d10 0%, #101217 100%); border-top: 14px solid #e30613; gap: 26px; }
+    .brand-kicker { margin: 0 0 22px; color: #fff46b; font-size: 34px; line-height: 1; font-weight: 950; text-transform: uppercase; }
+    .brand-title { margin: 0; color: #fff; font-size: 86px; line-height: .98; font-weight: 950; letter-spacing: 0; text-wrap: balance; text-shadow: 0 10px 34px rgba(0,0,0,.7); }
+    .follow-pill { display: inline-flex; align-items: center; justify-content: center; min-height: 104px; margin-top: 38px; padding: 0 52px; background: #e30613; color: #fff; font-size: 48px; font-weight: 950; box-shadow: 14px 14px 0 rgba(255,255,255,.9); }
+    .channel-name { margin: 0; color: #fff; font-size: 64px; line-height: 1; font-weight: 950; }
+    .channel-meta { margin: 0; color: #f3f6f9; font-size: 34px; line-height: 1.24; font-weight: 850; max-width: 920px; text-wrap: balance; }
+    .source-line { margin: 0; color: #fff46b; font-size: 30px; line-height: 1.18; font-weight: 950; text-transform: uppercase; }
+    .media-window { position: absolute; left: 0; top: 640px; width: 100%; height: 640px; overflow: hidden; background: #000; z-index: 1; }
+    .scene-video { position: absolute; left: 0; top: 640px; width: 100%; height: 640px; object-fit: cover; object-position: center center; filter: saturate(1.08) contrast(1.05) brightness(.92); opacity: 0; z-index: 2; }
+    .scene { position: absolute; left: 0; top: 640px; width: 100%; height: 640px; opacity: 0; overflow: hidden; background: #050607; z-index: 3; }
+    .scene.has-video { background: transparent; pointer-events: none; }
+    .bg-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center center; filter: saturate(1.08) contrast(1.05) brightness(.92); }
+    .fallback-bg { position: absolute; inset: 0; background: linear-gradient(145deg, #111318, #050607 52%, #181a1f); }
+    .has-media .fallback-bg { opacity: 0; }
     .outro { position: absolute; inset: 0; opacity: 0; overflow: hidden; background: linear-gradient(135deg, #050505 0%, #151515 48%, #e30613 49%, #e30613 58%, #050505 59%); }
     .outro::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.2), rgba(0,0,0,.72)); }
     .outro-inner { position: absolute; inset: 0; padding: 170px 74px 190px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 38px; }
@@ -1394,11 +1427,21 @@ function renderComposition({ story, selection, scenes, media, totalSeconds }) {
 </head>
 <body>
   <div id="stage" data-composition-id="root" data-start="0" data-duration="${totalSeconds}" data-width="${WIDTH}" data-height="${HEIGHT}">
+    <section class="channel-panel top">
+      <p class="brand-kicker">Tin mới mỗi ngày</p>
+      <h1 class="brand-title">Theo dõi kênh để cập nhật nhanh tin tức nóng</h1>
+      <div class="follow-pill">${escapeHtml(WATERMARK)}</div>
+    </section>
+    <div class="media-window"></div>
     ${videoHtml}
     ${sceneHtml}
+    <section class="channel-panel bottom">
+      <p class="channel-name">${escapeHtml(WATERMARK)}</p>
+      <p class="source-line">${escapeHtml(story.sourceName)} • ${escapeHtml(formatPubDate(story.pubDate))} • ${escapeHtml(storyTitle)}</p>
+    </section>
     <section id="outro-subscribe" class="clip outro" data-start="${outroStart}" data-duration="${OUTRO_SECONDS}">
       <div class="outro-inner">
-        <h2>Theo doi dien bien tiep theo</h2>
+        <h2>Theo dõi diễn biến tiếp theo</h2>
         <p>${escapeHtml(limitWords(story.title, 16))}</p>
         <div class="pill">${escapeHtml(WATERMARK)}</div>
       </div>
@@ -1423,7 +1466,9 @@ function renderComposition({ story, selection, scenes, media, totalSeconds }) {
         if (!video) return;
         const local = time - timings[index].start;
         const visible = local >= 0 && local <= timings[index].duration;
-        video.style.opacity = visible ? "1" : "0";
+        const fade = ${TRANSITION_SECONDS};
+        const opacity = visible ? Math.max(0, Math.min(1, local / fade, (timings[index].duration - local) / fade)) : 0;
+        video.style.opacity = String(opacity);
         if (!visible) return;
         const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : timings[index].duration;
         const target = duration > 0 ? local % duration : local;
@@ -1442,18 +1487,9 @@ function renderComposition({ story, selection, scenes, media, totalSeconds }) {
         const duration = timings[index].duration;
         const video = document.getElementById("scene-video-" + String(index + 1).padStart(2, "0"));
         const photo = scene.querySelector(".bg-photo") || video;
-        const title = scene.querySelector("h1");
-        const words = scene.querySelectorAll("h1 span");
-        const body = scene.querySelector(".body");
-        master.set(scene, { opacity: 1 }, start);
-        master.fromTo(scene.querySelector(".topbar"), { y: -42, opacity: 0 }, { y: 0, opacity: 1, duration: .35 }, start + .05);
-        master.fromTo(scene.querySelector(".source"), { y: 28, opacity: 0 }, { y: 0, opacity: 1, duration: .3 }, start + .1);
-        master.fromTo(title, { y: 78, opacity: .35, scale: .9 }, { y: 0, opacity: 1, scale: 1, duration: .55, ease: "back.out(1.45)" }, start + .18);
-        master.fromTo(words, { y: 42, opacity: .25 }, { y: 0, opacity: 1, stagger: .018, duration: .36 }, start + .26);
-        master.fromTo(body, { y: 44, opacity: 0 }, { y: 0, opacity: 1, duration: .44 }, start + .9);
-        master.fromTo(scene.querySelector(".scanline"), { scaleX: 0 }, { scaleX: 1, duration, ease: "none" }, start);
-        if (photo) master.to(photo, { scale: 1.09, x: index % 2 ? 30 : -28, y: index % 3 ? -18 : 16, duration, ease: "none" }, start);
-        master.to(scene, { opacity: 0, scale: 1.025, duration: .32, ease: "power2.in" }, start + duration - .32);
+        master.fromTo(scene, { opacity: 0 }, { opacity: 1, duration: ${TRANSITION_SECONDS}, ease: "power2.out" }, start);
+        if (photo) master.to(photo, { scale: 1.04, duration, ease: "none" }, start);
+        master.to(scene, { opacity: 0, duration: ${TRANSITION_SECONDS}, ease: "power2.in" }, start + duration - ${TRANSITION_SECONDS});
       });
       master.to(outro, { opacity: 1, duration: .28 }, ${outroStart});
       master.fromTo(outro.querySelector(".outro-inner").children, { y: 50, opacity: 0, scale: .94 }, { y: 0, opacity: 1, scale: 1, stagger: .11, duration: .52, ease: "back.out(1.45)" }, ${outroStart} + .14);
@@ -1477,15 +1513,16 @@ function renderComposition({ story, selection, scenes, media, totalSeconds }) {
           const duration = timings[index].duration;
           const visible = local >= 0 && local <= duration;
           let opacity = visible ? 1 : 0;
-          if (visible && local > duration - .32) opacity = 1 - easeIn((local - (duration - .32)) / .32);
+          if (visible) {
+            opacity = Math.min(1, easeOut(local / ${TRANSITION_SECONDS}), 1 - easeIn((local - (duration - ${TRANSITION_SECONDS})) / ${TRANSITION_SECONDS}));
+          }
           scene.style.opacity = String(opacity);
           scene.style.transform = "scale(" + (1 + .025 * easeIn((local - (duration - .32)) / .32)) + ")";
           const p = clamp(local / duration);
           const video = document.getElementById("scene-video-" + String(index + 1).padStart(2, "0"));
           const photo = scene.querySelector(".bg-photo") || video;
-          if (photo) photo.style.transform = "translate(" + ((index % 2 ? 30 : -28) * p) + "px," + ((index % 3 ? -18 : 16) * p) + "px) scale(" + (1.02 + .07 * p) + ")";
+          if (photo) photo.style.transform = "scale(" + (1 + .04 * p) + ")";
           if (video) video.style.opacity = String(opacity);
-          scene.querySelector(".scanline").style.transform = "scaleX(" + p + ")";
         });
         const outroLocal = t - ${outroStart};
         outro.style.opacity = String(outroLocal >= 0 && outroLocal <= ${OUTRO_SECONDS} ? 1 : 0);
@@ -1619,13 +1656,23 @@ async function main() {
     story = normalizedCandidates.find((item) => item.id === fallback.selectedId) || normalizedCandidates[0];
     Object.assign(selection, fallback);
   }
+  story = {
+    ...story,
+    mediaCandidates: prioritizeVideoMedia(story.mediaCandidates || [])
+  };
+  if (!selection.voiceoverScript) {
+    selection.voiceoverScript = fallbackVoiceoverScript(story);
+  }
 
   let scenes = ensureSceneDurations(selection.scenes.length >= 6 ? selection.scenes : buildFallbackScenes(story));
   scenes = assignSceneTimings(scenes);
-  const { media, errors: mediaDownloadErrors } = await downloadStoryMedia(story, assetDir);
-  scenes = await synthesizeSceneTts(scenes, assetDir);
+  const { media: downloadedMedia, errors: mediaDownloadErrors } = await downloadStoryMedia(story, assetDir);
+  const media = prioritizeVideoMedia(downloadedMedia);
   const contentSeconds = scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
   const totalSeconds = contentSeconds + OUTRO_SECONDS;
+  const ttsResult = await synthesizeStoryTts(story, selection, scenes, assetDir, contentSeconds);
+  scenes = ttsResult.scenes;
+  const narrationAudio = ttsResult.narrationAudio;
 
   const metadata = {
     source: PRIMARY_SOURCE.url,
@@ -1648,6 +1695,7 @@ async function main() {
       reason: selection.reason,
       angle: selection.angle,
       videoTitle: selection.videoTitle,
+      voiceoverScript: selection.voiceoverScript,
       caption: selection.caption,
       hashtags: selection.hashtags
     },
@@ -1661,6 +1709,7 @@ async function main() {
     })),
     mediaDownloadErrors,
     scenes,
+    narrationAudio,
     candidates: normalizedCandidates.map((item) => ({
       id: item.id,
       title: item.title,
@@ -1679,11 +1728,12 @@ async function main() {
       provider: HOOK_TTS_PROVIDER,
       mode: VIENEU_MODE,
       volume: HOOK_TTS_VOLUME,
-      backgroundVolume: scenes.some((scene) => Boolean(scene.audio)) ? BACKGROUND_VOLUME_WITH_TTS : BACKGROUND_VOLUME
+      backgroundVolume: narrationAudio ? BACKGROUND_VOLUME_WITH_TTS : BACKGROUND_VOLUME,
+      style: "single-track"
     }
   };
 
-  const html = renderComposition({ story, selection, scenes, media, totalSeconds });
+  const html = renderComposition({ story, selection, scenes, media, totalSeconds, narrationAudio });
   await writeFile(path.join(outDir, "index.html"), html, "utf8");
   await writeFile(path.join(outDir, "news.json"), JSON.stringify(metadata, null, 2), "utf8");
   await writeFile(path.join(outDir, "hot-story-selection.json"), JSON.stringify(metadata.selection, null, 2), "utf8");
