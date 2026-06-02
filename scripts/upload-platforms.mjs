@@ -13,19 +13,22 @@ const TIKTOK_PRIVACY_LEVELS = new Set([
 const CAPTION =
   "10 tin nổi bật hôm nay. Theo dõi @tintucchatluong để cập nhật tin tức nhanh mỗi sáng và tối. #tintuc #vnexpress #tintucchatluong";
 
-export async function writeCaption(outDir) {
+export async function writeCaption(outDir, caption = CAPTION) {
   const captionPath = path.join(outDir, "caption.txt");
-  await writeFile(captionPath, CAPTION, "utf8");
-  return CAPTION;
+  await writeFile(captionPath, caption, "utf8");
+  return caption;
 }
 
-export async function uploadToPlatforms({ outDir, videoPath, dryRun = false }) {
+export async function uploadToPlatforms({ outDir, videoPath, dryRun = false, caption: captionOverride, title: titleOverride, tags: tagsOverride }) {
   const env = await loadEnv();
-  const caption = await writeCaption(outDir);
+  const caption = await writeCaption(outDir, captionOverride || CAPTION);
+  const title = titleOverride || "10 tin nổi bật hôm nay";
+  const tags = Array.isArray(tagsOverride) && tagsOverride.length ? tagsOverride : ["tin tức", "vnexpress", "tintucchatluong", "shorts"];
   const report = {
     generatedAt: new Date().toISOString(),
     dryRun,
     caption,
+    title,
     videoPath,
     platforms: {}
   };
@@ -47,7 +50,7 @@ export async function uploadToPlatforms({ outDir, videoPath, dryRun = false }) {
 
   for (const [platform, upload] of jobs) {
     try {
-      report.platforms[platform] = await upload({ env, caption, videoPath, dryRun });
+      report.platforms[platform] = await upload({ env, caption, title, tags, videoPath, dryRun });
     } catch (error) {
       report.platforms[platform] = { status: "failed", error: error.message };
       errors[platform] = {
@@ -95,7 +98,7 @@ function skipped(reason, missingKeys = []) {
   return { status: "skipped", reason, missing: missingKeys };
 }
 
-async function uploadFacebookReel({ env, caption, videoPath, dryRun }) {
+async function uploadFacebookReel({ env, caption, title, videoPath, dryRun }) {
   const missingKeys = missing(env, ["FACEBOOK_PAGE_ID", "FACEBOOK_PAGE_ACCESS_TOKEN"]);
   if (missingKeys.length) return skipped("missing_facebook_credentials", missingKeys);
   if (dryRun) return { status: "skipped", reason: "dry_run" };
@@ -133,7 +136,7 @@ async function uploadFacebookReel({ env, caption, videoPath, dryRun }) {
     video_id: videoId,
     video_state: "PUBLISHED",
     description: caption,
-    title: "10 tin nổi bật hôm nay"
+    title
   });
 
   return {
@@ -143,7 +146,7 @@ async function uploadFacebookReel({ env, caption, videoPath, dryRun }) {
   };
 }
 
-async function uploadYoutubeShort({ env, caption, videoPath, dryRun }) {
+async function uploadYoutubeShort({ env, caption, title, tags, videoPath, dryRun }) {
   const missingKeys = missing(env, ["YOUTUBE_CLIENT_ID", "YOUTUBE_CLIENT_SECRET", "YOUTUBE_REFRESH_TOKEN"]);
   if (missingKeys.length) return skipped("missing_youtube_credentials", missingKeys);
   if (dryRun) return { status: "skipped", reason: "dry_run" };
@@ -152,10 +155,10 @@ async function uploadYoutubeShort({ env, caption, videoPath, dryRun }) {
   const boundary = `codex_vnexpress_${Date.now()}`;
   const metadata = {
     snippet: {
-      title: "10 tin nổi bật hôm nay #Shorts",
+      title: title.includes("#Shorts") ? title : `${title} #Shorts`,
       description: caption,
       categoryId: "25",
-      tags: ["tin tức", "vnexpress", "tintucchatluong", "shorts"]
+      tags
     },
     status: {
       privacyStatus: "public",

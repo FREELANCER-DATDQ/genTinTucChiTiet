@@ -1,0 +1,185 @@
+name: Hot Story Detailed Video
+
+on:
+  schedule:
+    - cron: "0 */2 * * *"
+  workflow_dispatch:
+    inputs:
+      slot:
+        description: "Slot muốn chạy thủ công (HHMM, ví dụ 0700 / 0900 / auto)"
+        required: false
+        default: "auto"
+      skip_render:
+        description: "Bỏ qua bước render video (chỉ generate metadata)"
+        type: boolean
+        required: false
+        default: false
+      dry_run_upload:
+        description: "Dry-run upload (không gọi API thật)"
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: hot-story-pipeline
+  cancel-in-progress: false
+
+jobs:
+  generate-and-upload:
+    name: "Hot Story (${{ github.event.inputs.slot || 'auto' }})"
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
+      CHROME_FLAGS: "--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --font-render-hinting=none"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare dedupe state directory
+        run: mkdir -p .vnexpress-state
+
+      - name: Restore dedupe state
+        uses: actions/cache/restore@v4
+        with:
+          path: .vnexpress-state
+          key: hot-story-dedupe-${{ github.run_id }}
+          restore-keys: |
+            hot-story-dedupe-
+
+      - name: Clear restored update marker
+        run: rm -f .vnexpress-state/updated.json
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install Chrome & FFmpeg
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg \
+            fonts-noto-cjk \
+            fonts-noto \
+            ca-certificates
+
+          wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+          sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          rm google-chrome-stable_current_amd64.deb
+
+          CHROME_PATH=$(command -v google-chrome-stable || command -v google-chrome)
+          echo "PUPPETEER_EXECUTABLE_PATH=$CHROME_PATH" >> "$GITHUB_ENV"
+          echo "FFmpeg: $(ffmpeg -version | head -1)"
+          echo "Chrome: $CHROME_PATH ($("$CHROME_PATH" --version))"
+
+      - name: Prepare background audio
+        env:
+          BACKGROUND_AUDIO_URL: ${{ secrets.HOT_STORY_BACKGROUND_AUDIO_URL || secrets.BACKGROUND_AUDIO_URL }}
+        run: |
+          mkdir -p assets
+          AUDIO_DEST="assets/background01.mp3"
+
+          if [ -n "$BACKGROUND_AUDIO_URL" ]; then
+            if echo "$BACKGROUND_AUDIO_URL" | grep -q "drive.google.com/file/d/"; then
+              FILE_ID=$(echo "$BACKGROUND_AUDIO_URL" | sed -E 's|.*drive\.google\.com/file/d/([^/]+).*|\1|')
+              BACKGROUND_AUDIO_URL="https://drive.google.com/uc?export=download&id=$FILE_ID"
+            fi
+
+            curl -fsSL --retry 3 --retry-delay 5 \
+              -A "Mozilla/5.0" \
+              -o "$AUDIO_DEST" \
+              "$BACKGROUND_AUDIO_URL"
+
+            FILE_TYPE=$(file -b --mime-type "$AUDIO_DEST")
+            if echo "$FILE_TYPE" | grep -q "text/html"; then
+              echo "Background audio URL returned HTML instead of audio."
+              head -n 10 "$AUDIO_DEST"
+              exit 1
+            fi
+          elif [ ! -f "$AUDIO_DEST" ]; then
+            echo "Missing background audio. Set HOT_STORY_BACKGROUND_AUDIO_URL or BACKGROUND_AUDIO_URL."
+            exit 1
+          fi
+
+      - name: Determine run arguments
+        id: args
+        run: |
+          SLOT="${{ github.event.inputs.slot }}"
+          if [ -z "$SLOT" ] || [ "$SLOT" = "auto" ]; then
+            SLOT="auto"
+          fi
+
+          ARGS=""
+          if [ "$SLOT" != "auto" ]; then
+            ARGS="--slot $SLOT"
+          fi
+
+          if [ "${{ github.event.inputs.skip_render }}" = "true" ]; then
+            ARGS="$ARGS --skip-render"
+          fi
+
+          if [ "${{ github.event.inputs.dry_run_upload }}" = "true" ]; then
+            ARGS="$ARGS --dry-run-upload"
+          else
+            ARGS="$ARGS --upload"
+          fi
+
+          echo "args=$ARGS" >> "$GITHUB_OUTPUT"
+          echo "Run args: node scripts/hot-story-video.mjs $ARGS"
+
+      - name: Run hot story pipeline
+        env:
+          UPLOAD_ENABLED: "true"
+          VNEXPRESS_DEDUPE_STATE: ".vnexpress-state/seen-news.json"
+          HYPERFRAMES_QUALITY: "draft"
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-2.5-flash' }}
+          HOT_STORY_CANDIDATE_COUNT: ${{ secrets.HOT_STORY_CANDIDATE_COUNT || '12' }}
+          HOT_STORY_DURATION_TARGET: ${{ secrets.HOT_STORY_DURATION_TARGET || '75' }}
+          HOOK_TTS_ENABLED: ${{ secrets.HOT_STORY_HOOK_TTS_ENABLED || 'false' }}
+          BACKGROUND_VOLUME: ${{ secrets.HOT_STORY_BACKGROUND_VOLUME || '0.42' }}
+          BACKGROUND_VOLUME_WITH_TTS: ${{ secrets.HOT_STORY_BACKGROUND_VOLUME_WITH_TTS || '0.25' }}
+          FACEBOOK_PAGE_ID: ${{ secrets.FACEBOOK_PAGE_ID }}
+          FACEBOOK_PAGE_ACCESS_TOKEN: ${{ secrets.FACEBOOK_PAGE_ACCESS_TOKEN }}
+          YOUTUBE_CLIENT_ID: ${{ secrets.YOUTUBE_CLIENT_ID }}
+          YOUTUBE_CLIENT_SECRET: ${{ secrets.YOUTUBE_CLIENT_SECRET }}
+          YOUTUBE_REFRESH_TOKEN: ${{ secrets.YOUTUBE_REFRESH_TOKEN }}
+          TIKTOK_CLIENT_KEY: ${{ secrets.TIKTOK_CLIENT_KEY }}
+          TIKTOK_CLIENT_SECRET: ${{ secrets.TIKTOK_CLIENT_SECRET }}
+          TIKTOK_REFRESH_TOKEN: ${{ secrets.TIKTOK_REFRESH_TOKEN }}
+        run: |
+          node scripts/hot-story-video.mjs ${{ steps.args.outputs.args }}
+
+      - name: Save dedupe state
+        if: ${{ success() && hashFiles('.vnexpress-state/updated.json') != '' }}
+        uses: actions/cache/save@v4
+        with:
+          path: .vnexpress-state
+          key: hot-story-dedupe-${{ github.run_id }}
+
+      - name: Upload output artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: hot-story-output-${{ github.run_number }}
+          path: |
+            outputs/
+            !outputs/**/*.mp3
+          retention-days: 7
+
+      - name: Show reports
+        if: always()
+        run: |
+          REPORT=$(find outputs -name "upload-report.json" | head -1)
+          if [ -n "$REPORT" ]; then
+            echo "=== Upload Report ==="
+            cat "$REPORT"
+          fi
+          ERROR=$(find outputs -name "error.log" | head -1)
+          if [ -n "$ERROR" ]; then
+            echo "=== Error Log ==="
+            cat "$ERROR"
+          fi

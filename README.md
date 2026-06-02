@@ -9,7 +9,7 @@ Tự động tạo video dọc MP4 từ RSS VnExpress "Tin nổi bật", bù tin
 - Màn hình subscribe/follow cuối video
 - Nhạc nền từ `assets/background01.mp3` (hoặc cấu hình qua `BACKGROUND_AUDIO_PATH`)
 - Có thể bật giọng đọc hook/title bằng VieNeu-TTS qua `HOOK_TTS_ENABLED=true`
-- Ảnh bài báo làm background động toàn màn hình khi có
+- Ảnh/GIF/video gốc từ RSS và trang bài báo làm background động toàn màn hình khi có
 - Watermark: `@tintucchatluong`
 - Output tại `outputs/vnexpress/YYYY-MM-DD/HHMM/`
 - Lọc tin theo `pubDate` từng slot 2 giờ, ví dụ 0700 (04:58→07:00), 0900 (06:58→09:00)
@@ -17,7 +17,7 @@ Tự động tạo video dọc MP4 từ RSS VnExpress "Tin nổi bật", bù tin
 Mỗi lần chạy tạo ra:
 
 - `index.html` — HyperFrames HTML composition
-- `news.json` — metadata, hook, lead, đường dẫn ảnh đã tải
+- `news.json` — metadata, hook, lead, media gốc đã tải và lỗi tải media nếu có
 - `assets/hook-01.wav`…`assets/hook-10.wav` — giọng đọc hook khi bật VieNeu-TTS
 - `caption.txt` — caption cố định cho mạng xã hội
 - `upload-report.json` — kết quả upload từng nền tảng
@@ -147,6 +147,47 @@ HF_TOKEN=
 
 ## Commands
 
+## Video chi tiết 1 tin hot nhất bằng Gemini
+
+Luồng mới tạo video dọc `1080x1920` khoảng `60-90s`, chỉ chọn 1 tin hot nhất trong các tin quét được. Gemini sẽ chấm tin và sinh kịch bản 6-7 cảnh; media ưu tiên lấy từ RSS và chính trang báo: ảnh, GIF, video embed hoặc `VideoObject` JSON-LD. Nếu chưa cấu hình `GEMINI_API_KEY`, script tự fallback sang chấm điểm heuristic để vẫn tạo được metadata/video.
+
+Pipeline không tự generate ảnh khi bài thiếu media. Nếu số media gốc ít hơn số cảnh, video sẽ tái sử dụng media đã tải; nếu bài không có media nào, composition dùng nền tin tức/text-only.
+
+```env
+GEMINI_API_KEY=your-gemini-api-key
+GEMINI_MODEL=gemini-2.5-flash
+HOT_STORY_CANDIDATE_COUNT=12
+HOT_STORY_DURATION_TARGET=75
+HOT_STORY_FORCE_URL=
+```
+
+`HOT_STORY_FORCE_URL` là tuỳ chọn để ép generate từ một URL bài báo cụ thể khi test/debug. Video `.m3u8` sẽ được FFmpeg tải/chuyển thành MP4 trong `assets/story-video-XX.mp4`.
+
+Generate metadata, không render:
+
+```bash
+npm run hotstory:generate
+npm run hotstory:generate -- --slot 0700
+```
+
+Generate và render:
+
+```bash
+npm run hotstory:render
+npm run hotstory:morning
+npm run hotstory:noon
+npm run hotstory:evening
+```
+
+Generate, render và upload:
+
+```bash
+npm run hotstory:upload
+npm run hotstory:upload:dry-run
+```
+
+Output nằm tại `outputs/hot-story/YYYY-MM-DD/HHMM/`, gồm `index.html`, `news.json`, `hot-story-selection.json`, `caption.txt`, media gốc đã tải trong `assets/`, và `final.mp4` nếu render.
+
 ### macOS / Linux
 
 Generate metadata (không render):
@@ -260,4 +301,4 @@ docker compose run --rm vnexpress-morning --slot 0700 --skip-render
 
 ## Notes
 
-Script mở từng bài báo VnExpress, lấy `h1` làm hook và đoạn lead làm summary. Nếu feed item không có ảnh, thử `og:image` của bài báo; nếu vẫn không có, dùng background animated fallback. Ảnh bài báo được dùng trực tiếp với motion và overlay, không blur.
+Script mở từng bài báo VnExpress, lấy `h1` làm hook và đoạn lead làm summary. Media gốc được lấy từ RSS và trang bài chi tiết, gồm ảnh, GIF, video embed và `VideoObject`; nếu không có media thì dùng background animated fallback dạng tin tức/text-only. Media bài báo được dùng trực tiếp với motion và overlay, không blur.

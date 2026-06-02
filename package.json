@@ -13,6 +13,13 @@
     "vnexpress:morning:upload": "node scripts/vnexpress-hot-news.mjs --slot 0700 --upload",
     "vnexpress:noon:upload": "node scripts/vnexpress-hot-news.mjs --slot 1200 --upload",
     "vnexpress:evening:upload": "node scripts/vnexpress-hot-news.mjs --slot 2000 --upload",
-    "vnexpress:upload:dry-run": "node scripts/vnexpress-hot-news.mjs --skip-render --dry-run-upload"
+    "vnexpress:upload:dry-run": "node scripts/vnexpress-hot-news.mjs --skip-render --dry-run-upload",
+    "hotstory:generate": "node scripts/hot-story-video.mjs --skip-render",
+    "hotstory:render": "node scripts/hot-story-video.mjs",
+    "hotstory:upload": "node scripts/hot-story-video.mjs --upload",
+    "hotstory:morning": "node scripts/hot-story-video.mjs --slot 0700",
+    "hotstory:noon": "node scripts/hot-story-video.mjs --slot 1200",
+    "hotstory:evening": "node scripts/hot-story-video.mjs --slot 2000",
+    "hotstory:upload:dry-run": "node scripts/hot-story-video.mjs --skip-render --dry-run-upload"
   }
 }
