@@ -1359,6 +1359,12 @@ function renderStageVideoElement(media, scene) {
   return `<video id="scene-video-${String(scene.index).padStart(2, "0")}" class="scene-video" src="${escapeHtml(media.localMedia)}"${poster} muted playsinline preload="auto" loop data-start="${scene.startSeconds}" data-duration="${scene.durationSeconds}"></video>`;
 }
 
+function renderSceneSubtitle(scene) {
+  const text = limitWords(scene.narration || scene.body || scene.headline || "", 22);
+  if (!text) return "";
+  return `<div class="scene-subtitle">${escapeHtml(text)}</div>`;
+}
+
 function renderComposition({ story, selection, scenes, media, totalSeconds, narrationAudio }) {
   const sceneMedia = scenes.map((scene, index) => ({
     scene,
@@ -1375,6 +1381,7 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
       <section id="scene-${String(scene.index).padStart(2, "0")}" class="clip scene ${hasMedia ? "has-media" : "no-media"} ${selectedMedia?.type === "video" ? "has-video" : ""}" data-start="${scene.startSeconds}" data-duration="${scene.durationSeconds}" style="--i:${index};">
         ${renderImageElement(selectedMedia)}
         <div class="fallback-bg"></div>
+        ${renderSceneSubtitle(scene)}
       </section>`;
   }).join("\n");
   const hasVoice = Boolean(narrationAudio?.src);
@@ -1414,6 +1421,7 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
     .bg-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center center; filter: saturate(1.08) contrast(1.05) brightness(.92); }
     .fallback-bg { position: absolute; inset: 0; background: linear-gradient(145deg, #111318, #050607 52%, #181a1f); }
     .has-media .fallback-bg { opacity: 0; }
+    .scene-subtitle { position: absolute; left: 48px; right: 48px; top: 28px; z-index: 6; margin: 0 auto; padding: 16px 22px 18px; color: #fff; background: rgba(0,0,0,.64); border: 4px solid rgba(255,255,255,.9); font-size: 38px; line-height: 1.12; font-weight: 950; text-align: center; text-wrap: balance; text-shadow: 0 4px 16px rgba(0,0,0,.95), 0 0 2px #000; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
     .outro { position: absolute; inset: 0; opacity: 0; overflow: hidden; background: linear-gradient(135deg, #050505 0%, #151515 48%, #e30613 49%, #e30613 58%, #050505 59%); }
     .outro::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.2), rgba(0,0,0,.72)); }
     .outro-inner { position: absolute; inset: 0; padding: 170px 74px 190px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 38px; }
