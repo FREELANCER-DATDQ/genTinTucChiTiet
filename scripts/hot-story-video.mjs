@@ -1359,10 +1359,36 @@ function renderStageVideoElement(media, scene) {
   return `<video id="scene-video-${String(scene.index).padStart(2, "0")}" class="scene-video" src="${escapeHtml(media.localMedia)}"${poster} muted playsinline preload="auto" loop data-start="${scene.startSeconds}" data-duration="${scene.durationSeconds}"></video>`;
 }
 
-function renderSceneSubtitle(scene) {
-  const text = limitWords(scene.narration || scene.body || scene.headline || "", 22);
-  if (!text) return "";
-  return `<div class="scene-subtitle">${escapeHtml(text)}</div>`;
+function subtitleCueTexts(text, maxWords = 13) {
+  const clean = String(text || "").replace(/\s+/g, " ").trim();
+  if (!clean) return [];
+  const sentences = clean.match(/[^.!?。！？]+[.!?。！？]+|[^.!?。！？]+$/g) || [clean];
+  const cues = [];
+  for (const sentence of sentences) {
+    const words = sentence.trim().split(/\s+/).filter(Boolean);
+    for (let index = 0; index < words.length; index += maxWords) {
+      cues.push(words.slice(index, index + maxWords).join(" "));
+    }
+  }
+  return cues.filter(Boolean);
+}
+
+function renderSubtitleCues(story, selection, scenes, narrationAudio, totalSeconds) {
+  const contentSeconds = scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
+  const voiceDuration = Math.max(1, Math.min(narrationAudio?.durationSeconds || contentSeconds, contentSeconds, totalSeconds - OUTRO_SECONDS));
+  const cues = subtitleCueTexts(storyNarrationText(story, selection, scenes));
+  if (!cues.length) return "";
+  const wordCounts = cues.map((cue) => cue.split(/\s+/).filter(Boolean).length);
+  const totalWords = Math.max(1, wordCounts.reduce((sum, count) => sum + count, 0));
+  let cursor = 0.25;
+  return cues.map((cue, index) => {
+    const share = wordCounts[index] / totalWords;
+    const remaining = Math.max(0.15, 0.25 + voiceDuration - cursor);
+    const duration = index === cues.length - 1 ? remaining : Math.max(1.35, share * voiceDuration);
+    const html = `<div class="subtitle-cue" data-start="${cursor.toFixed(3)}" data-duration="${duration.toFixed(3)}">${escapeHtml(cue)}</div>`;
+    cursor += duration;
+    return html;
+  }).join("\n      ");
 }
 
 function renderComposition({ story, selection, scenes, media, totalSeconds, narrationAudio }) {
@@ -1381,7 +1407,6 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
       <section id="scene-${String(scene.index).padStart(2, "0")}" class="clip scene ${hasMedia ? "has-media" : "no-media"} ${selectedMedia?.type === "video" ? "has-video" : ""}" data-start="${scene.startSeconds}" data-duration="${scene.durationSeconds}" style="--i:${index};">
         ${renderImageElement(selectedMedia)}
         <div class="fallback-bg"></div>
-        ${renderSceneSubtitle(scene)}
       </section>`;
   }).join("\n");
   const hasVoice = Boolean(narrationAudio?.src);
@@ -1421,7 +1446,8 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
     .bg-photo { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center center; filter: saturate(1.08) contrast(1.05) brightness(.92); }
     .fallback-bg { position: absolute; inset: 0; background: linear-gradient(145deg, #111318, #050607 52%, #181a1f); }
     .has-media .fallback-bg { opacity: 0; }
-    .scene-subtitle { position: absolute; left: 48px; right: 48px; top: 28px; z-index: 6; margin: 0 auto; padding: 16px 22px 18px; color: #fff; background: rgba(0,0,0,.64); border: 4px solid rgba(255,255,255,.9); font-size: 38px; line-height: 1.12; font-weight: 950; text-align: center; text-wrap: balance; text-shadow: 0 4px 16px rgba(0,0,0,.95), 0 0 2px #000; box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+    .subtitle-layer { position: absolute; left: 0; top: 640px; width: 100%; height: 640px; z-index: 8; pointer-events: none; overflow: hidden; }
+    .subtitle-cue { position: absolute; left: 72px; right: 72px; bottom: 46px; opacity: 0; transform: translateY(12px); color: #fff; font-size: 44px; line-height: 1.1; font-weight: 950; text-align: center; text-wrap: balance; text-shadow: 0 5px 0 #000, 0 -2px 0 #000, 2px 0 0 #000, -2px 0 0 #000, 0 8px 26px rgba(0,0,0,.95); }
     .outro { position: absolute; inset: 0; opacity: 0; overflow: hidden; background: linear-gradient(135deg, #050505 0%, #151515 48%, #e30613 49%, #e30613 58%, #050505 59%); }
     .outro::before { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,.2), rgba(0,0,0,.72)); }
     .outro-inner { position: absolute; inset: 0; padding: 170px 74px 190px; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 38px; }
@@ -1443,6 +1469,9 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
     <div class="media-window"></div>
     ${videoHtml}
     ${sceneHtml}
+    <div class="subtitle-layer">
+      ${renderSubtitleCues(story, selection, scenes, narrationAudio, totalSeconds)}
+    </div>
     <section class="channel-panel bottom">
       <p class="channel-name">${escapeHtml(WATERMARK)}</p>
       <p class="source-line">${escapeHtml(story.sourceName)} • ${escapeHtml(formatPubDate(story.pubDate))} • ${escapeHtml(storyTitle)}</p>
@@ -1464,6 +1493,11 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
     window.__hfFps = ${FPS};
     const timings = ${JSON.stringify(scenes.map((scene) => ({ start: scene.startSeconds, duration: scene.durationSeconds })))};
     const scenes = [...document.querySelectorAll(".scene")];
+    const subtitleCues = [...document.querySelectorAll(".subtitle-cue")].map((element) => ({
+      element,
+      start: Number(element.dataset.start || 0),
+      duration: Number(element.dataset.duration || 0)
+    }));
     const outro = document.querySelector(".outro");
     const progress = document.querySelector(".progress-inner");
     let seek;
@@ -1483,6 +1517,17 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
         if (Math.abs((video.currentTime || 0) - target) > .08) {
           try { video.currentTime = target; } catch {}
         }
+      });
+    };
+
+    const syncSubtitles = (time) => {
+      subtitleCues.forEach(({ element, start, duration }) => {
+        const local = time - start;
+        const visible = local >= 0 && local <= duration;
+        const fade = .14;
+        const opacity = visible ? Math.max(0, Math.min(1, local / fade, (duration - local) / fade)) : 0;
+        element.style.opacity = String(opacity);
+        element.style.transform = "translateY(" + (12 * (1 - opacity)).toFixed(2) + "px)";
       });
     };
 
@@ -1507,6 +1552,7 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
         const time = Math.max(0, Math.min(${totalSeconds}, t));
         master.time(time);
         syncVideos(time);
+        syncSubtitles(time);
       };
     } else {
       const clamp = (n, min = 0, max = 1) => Math.max(min, Math.min(max, n));
@@ -1515,6 +1561,7 @@ function renderComposition({ story, selection, scenes, media, totalSeconds, narr
       seek = (time) => {
         const t = clamp(time, 0, ${totalSeconds});
         syncVideos(t);
+        syncSubtitles(t);
         progress.style.width = (t / ${totalSeconds} * 100) + "%";
         scenes.forEach((scene, index) => {
           const local = t - timings[index].start;
