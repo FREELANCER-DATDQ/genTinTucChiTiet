@@ -209,7 +209,7 @@ async function uploadTikTok({ env, caption, videoPath, dryRun }) {
   }
 
   const videoSize = (await stat(videoPath)).size;
-  const init = await tiktokPost("https://open.tiktokapis.com/v2/post/publish/inbox/video/init/", accessToken, {
+  const init = await tiktokPost("https://open.tiktokapis.com/v2/post/publish/video/init/", accessToken, {
     post_info: {
       title: caption,
       privacy_level: privacyLevel,
