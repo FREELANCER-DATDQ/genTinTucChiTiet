@@ -3,6 +3,9 @@ import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 
 const GRAPH_VERSION = "v23.0";
+const TIKTOK_DIRECT_POST_URL = "https://open.tiktokapis.com/v2/post/publish/video/init/";
+const TIKTOK_INBOX_UPLOAD_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/";
+const TIKTOK_DAILY_POST_LIMIT_CODE = "spam_risk_too_many_posts";
 const TIKTOK_DEFAULT_PRIVACY_LEVEL = "PUBLIC_TO_EVERYONE";
 const TIKTOK_PRIVACY_LEVELS = new Set([
   "PUBLIC_TO_EVERYONE",
@@ -209,24 +212,37 @@ async function uploadTikTok({ env, caption, videoPath, dryRun }) {
   }
 
   const videoSize = (await stat(videoPath)).size;
-  const init = await tiktokPost("https://open.tiktokapis.com/v2/post/publish/video/init/", accessToken, {
-    post_info: {
-      title: caption,
-      privacy_level: privacyLevel,
-      disable_duet: false,
-      disable_comment: false,
-      disable_stitch: false,
-      video_cover_timestamp_ms: 1000,
-      brand_content_toggle: false,
-      brand_organic_toggle: false
-    },
-    source_info: {
-      source: "FILE_UPLOAD",
-      video_size: videoSize,
-      chunk_size: videoSize,
-      total_chunk_count: 1
+  const sourceInfo = {
+    source: "FILE_UPLOAD",
+    video_size: videoSize,
+    chunk_size: videoSize,
+    total_chunk_count: 1
+  };
+  let delivery = "direct_post";
+  let init;
+  try {
+    init = await tiktokPost(TIKTOK_DIRECT_POST_URL, accessToken, {
+      post_info: {
+        title: caption,
+        privacy_level: privacyLevel,
+        disable_duet: false,
+        disable_comment: false,
+        disable_stitch: false,
+        video_cover_timestamp_ms: 1000,
+        brand_content_toggle: false,
+        brand_organic_toggle: false
+      },
+      source_info: sourceInfo
+    });
+  } catch (error) {
+    if (!(error instanceof TikTokRequestError) || error.code !== TIKTOK_DAILY_POST_LIMIT_CODE) {
+      throw error;
     }
-  });
+    delivery = "tiktok_inbox";
+    init = await tiktokPost(TIKTOK_INBOX_UPLOAD_URL, accessToken, {
+      source_info: sourceInfo
+    });
+  }
 
   const uploadUrl = init.data?.upload_url;
   const publishId = init.data?.publish_id;
@@ -243,6 +259,15 @@ async function uploadTikTok({ env, caption, videoPath, dryRun }) {
     duplex: "half"
   });
   await requireOk(uploadResponse, "TikTok binary upload failed");
+
+  if (delivery === "tiktok_inbox") {
+    return {
+      status: "draft_uploaded",
+      delivery,
+      requiresManualPost: true,
+      publishId
+    };
+  }
 
   return {
     status: "uploaded",
@@ -292,11 +317,48 @@ async function tiktokPost(url, accessToken, body) {
     },
     body: JSON.stringify(body)
   });
-  const json = await requireJsonOk(response, `TikTok request failed: ${url}`);
+  const text = await response.text();
+  let json;
+  try {
+    json = text ? JSON.parse(text) : {};
+  } catch {
+    throw new TikTokRequestError({
+      url,
+      status: response.status,
+      message: `non-json response ${text.slice(0, 500)}`
+    });
+  }
+  if (!response.ok) {
+    throw new TikTokRequestError({
+      url,
+      status: response.status,
+      code: json.error?.code,
+      message: json.error?.message || JSON.stringify(json),
+      response: json
+    });
+  }
   if (json.error && json.error.code !== "ok") {
-    throw new Error(`TikTok API error ${json.error.code}: ${json.error.message || JSON.stringify(json.error)}`);
+    throw new TikTokRequestError({
+      url,
+      status: response.status,
+      code: json.error.code,
+      message: json.error.message || JSON.stringify(json.error),
+      response: json
+    });
   }
   return json;
+}
+
+class TikTokRequestError extends Error {
+  constructor({ url, status, code, message, response }) {
+    const codeLabel = code ? ` ${code}` : "";
+    super(`TikTok request failed: ${url}: HTTP ${status}${codeLabel}: ${message}`);
+    this.name = "TikTokRequestError";
+    this.status = status;
+    this.code = code;
+    this.apiMessage = message;
+    this.response = response;
+  }
 }
 
 async function graphPost(url, fields) {
