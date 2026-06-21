@@ -163,6 +163,14 @@ HOT_STORY_FORCE_URL=
 
 `HOT_STORY_FORCE_URL` là tuỳ chọn để ép generate từ một URL bài báo cụ thể khi test/debug. Video `.m3u8` sẽ được FFmpeg tải/chuyển thành MP4 trong `assets/story-video-XX.mp4`.
 
+Chạy local với một bài báo HTTPS cụ thể:
+
+```bash
+HOT_STORY_FORCE_URL="https://vnexpress.net/duong-dan-bai-bao.html" npm run hotstory:generate
+```
+
+Trên GitHub Actions, mở workflow **Hot Story Detailed Video** → **Run workflow**, nhập link vào ô **Link bài báo HTTPS muốn chạy thủ công** rồi chạy. Link có thể thuộc bất kỳ trang báo HTTPS nào; VnExpress và Vietnamnet dùng tên nguồn cấu hình sẵn, còn các báo khác dùng hostname làm tên nguồn và được đọc theo khả năng hỗ trợ của cấu trúc trang. Khi ô này để trống, workflow tiếp tục tự chọn tin từ RSS; `slot` chỉ quyết định thư mục output khi chạy bằng link thủ công.
+
 Generate metadata, không render:
 
 ```bash

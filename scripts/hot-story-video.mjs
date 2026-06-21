@@ -3,24 +3,11 @@ import { copyFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { NEWS_SOURCES, parseManualArticleUrl } from "./hot-story-sources.mjs";
 import { uploadToPlatforms, writeCaption } from "./upload-platforms.mjs";
 
 loadDotenv(path.resolve(".env"));
 
-const NEWS_SOURCES = [
-  {
-    role: "primary",
-    key: "vnexpress",
-    name: "VnExpress",
-    url: "https://vnexpress.net/rss/tin-noi-bat.rss"
-  },
-  {
-    role: "fallback",
-    key: "vietnamnet",
-    name: "Vietnamnet",
-    url: "https://vietnamnet.vn/tin-tuc-24h.rss"
-  }
-];
 const PRIMARY_SOURCE = NEWS_SOURCES.find((source) => source.role === "primary") || NEWS_SOURCES[0];
 const FALLBACK_SOURCES = NEWS_SOURCES.filter((source) => source.role === "fallback");
 const BACKGROUND_AUDIO = process.env.BACKGROUND_AUDIO_PATH || path.resolve("assets", "background01.mp3");
@@ -681,7 +668,7 @@ async function loadSourceItems(source, window) {
   return { parsed, enriched };
 }
 
-async function loadForcedItem(url) {
+async function loadForcedItem(url, source) {
   const html = await fetchText(url);
   const article = extractArticleDetails(html, url);
   const mediaCandidates = uniqueBy([
@@ -704,8 +691,8 @@ async function loadForcedItem(url) {
     imageUrl: imageCandidates[0] || "",
     imageCandidates,
     mediaCandidates,
-    sourceKey: PRIMARY_SOURCE.key,
-    sourceName: PRIMARY_SOURCE.name,
+    sourceKey: source.key,
+    sourceName: source.name,
     sourceUrl: url,
     articleText: article.paragraphs.join("\n")
   };
@@ -1643,30 +1630,32 @@ async function main() {
   const outDir = path.resolve("outputs", "hot-story", now.date, slot);
   const assetDir = path.join(outDir, "assets");
   await mkdir(outDir, { recursive: true });
+  const manualArticle = parseManualArticleUrl(HOT_STORY_FORCE_URL);
 
-  if (window) {
+  if (window && !manualArticle) {
     const fromStr = new Date(window.from).toLocaleString("vi-VN", { timeZone: "Asia/Bangkok" });
     const toStr = new Date(window.to).toLocaleString("vi-VN", { timeZone: "Asia/Bangkok" });
     console.log(`[slot ${slot}] Loc tin tu ${fromStr} -> ${toStr}`);
   }
 
-  const dedupeState = await readDedupeState(DEDUPE_STATE, now.date);
+  const dedupeState = manualArticle ? null : await readDedupeState(DEDUPE_STATE, now.date);
   const candidates = [];
   const sourceStats = {};
 
-  if (HOT_STORY_FORCE_URL) {
-    const forced = await loadForcedItem(HOT_STORY_FORCE_URL);
+  if (manualArticle) {
+    const { url, source } = manualArticle;
+    const forced = await loadForcedItem(url, source);
     candidates.push(forced);
     sourceStats.forced = {
-      sourceName: PRIMARY_SOURCE.name,
-      sourceUrl: HOT_STORY_FORCE_URL,
+      sourceName: source.name,
+      sourceUrl: url,
       role: "forced",
       parsed: 1,
       afterDedupe: 1,
       selected: 1,
       skippedDuplicateCount: 0
     };
-    console.log(`[source] Forced URL: ${HOT_STORY_FORCE_URL}`);
+    console.log(`[source] Forced URL (${source.name}): ${url}`);
   } else {
     for (const source of [PRIMARY_SOURCE, ...FALLBACK_SOURCES]) {
       if (candidates.length >= CANDIDATE_COUNT) break;

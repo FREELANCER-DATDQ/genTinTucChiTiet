@@ -9,6 +9,10 @@ on:
         description: "Slot muốn chạy thủ công (HHMM, ví dụ 0700 / 0900 / auto)"
         required: false
         default: "auto"
+      article_url:
+        description: "Link bài báo HTTPS muốn chạy thủ công (để trống để tự chọn tin)"
+        required: false
+        default: ""
       skip_render:
         description: "Bỏ qua bước render video (chỉ generate metadata)"
         type: boolean
@@ -168,6 +172,7 @@ jobs:
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-2.5-flash' }}
           HOT_STORY_CANDIDATE_COUNT: ${{ secrets.HOT_STORY_CANDIDATE_COUNT || '12' }}
           HOT_STORY_DURATION_TARGET: ${{ secrets.HOT_STORY_DURATION_TARGET || '75' }}
+          HOT_STORY_FORCE_URL: ${{ github.event.inputs.article_url || '' }}
           HOOK_TTS_ENABLED: ${{ secrets.HOT_STORY_HOOK_TTS_ENABLED || 'true' }}
           HOOK_TTS_PROVIDER: ${{ secrets.HOT_STORY_HOOK_TTS_PROVIDER || secrets.VIDEO5S_HOOK_TTS_PROVIDER || 'vieneu' }}
           HOOK_TTS_PYTHON: ".venv-vieneu/bin/python"

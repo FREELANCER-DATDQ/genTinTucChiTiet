@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "test": "node --test",
     "vnexpress:generate": "node scripts/vnexpress-hot-news.mjs --skip-render",
     "vnexpress:render": "node scripts/vnexpress-hot-news.mjs",
     "vnexpress:upload": "node scripts/vnexpress-hot-news.mjs --upload",
