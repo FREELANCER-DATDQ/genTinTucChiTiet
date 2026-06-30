@@ -4,6 +4,8 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 import { NEWS_SOURCES, parseManualArticleUrl } from "./hot-story-sources.mjs";
+import { resolveAiConfig, selectWithAi } from "./hot-story-ai.mjs";
+import { renderHotStoryComposition } from "./hot-story-visuals.mjs";
 import { uploadToPlatforms, writeCaption } from "./upload-platforms.mjs";
 
 loadDotenv(path.resolve(".env"));
@@ -24,8 +26,6 @@ const TRANSITION_SECONDS = 0.55;
 const DEDUPE_STATE = process.env.VNEXPRESS_DEDUPE_STATE || path.resolve(".vnexpress-state", "seen-news.json");
 const DEDUPE_UPDATED_MARKER = process.env.VNEXPRESS_DEDUPE_UPDATED_MARKER
   || path.join(path.dirname(DEDUPE_STATE), "updated.json");
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
-const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const HOT_STORY_FORCE_URL = process.env.HOT_STORY_FORCE_URL || "";
 const HOOK_TTS_ENABLED = envBool("HOOK_TTS_ENABLED", false);
 const HOOK_TTS_PROVIDER = process.env.HOOK_TTS_PROVIDER || "vieneu";
@@ -751,236 +751,9 @@ function limitTextByWords(value, maxWords) {
   return words.slice(0, maxWords).join(" ").replace(/[,.!?;:]*$/, ".");
 }
 
-function buildFallbackScenes(item) {
-  const title = item.hook || item.title;
-  const summary = item.summary || title;
-  const paragraphs = String(item.articleText || "").split(/\n+/).filter(Boolean);
-  const sceneTexts = [
-    {
-      label: "TIN NONG",
-      headline: limitWords(title, 13),
-      body: limitWords(summary, 28),
-      narration: `${title}. ${summary}`
-    },
-    {
-      label: "DIEN BIEN",
-      headline: "Chuyen gi dang xay ra?",
-      body: limitWords(paragraphs[0] || summary, 34),
-      narration: paragraphs[0] || summary
-    },
-    {
-      label: "BOI CANH",
-      headline: "Vi sao tin nay dang duoc chu y?",
-      body: limitWords(paragraphs[1] || summary, 34),
-      narration: paragraphs[1] || summary
-    },
-    {
-      label: "DIEM NONG",
-      headline: "Chi tiet dang chu y",
-      body: limitWords(paragraphs[2] || summary, 34),
-      narration: paragraphs[2] || summary
-    },
-    {
-      label: "TAC DONG",
-      headline: "Tac dong voi nguoi xem",
-      body: limitWords(paragraphs[3] || summary, 34),
-      narration: paragraphs[3] || summary
-    },
-    {
-      label: "THEO DOI",
-      headline: "Dien bien tiep theo",
-      body: limitWords(paragraphs[4] || "VnExpress va cac nguon tin se tiep tuc cap nhat khi co thong tin moi.", 34),
-      narration: paragraphs[4] || "Dien bien tiep theo se tiep tuc duoc cap nhat khi co thong tin moi."
-    }
-  ];
-  return sceneTexts.map((scene, index) => ({
-    ...scene,
-    durationSeconds: index === 0 ? 10 : 11,
-    visualHint: "news-photo",
-    mediaIndex: index,
-    imageIndex: index
-  }));
-}
-
-function fallbackSelection(items, reason = "Gemini unavailable") {
-  const scored = items
-    .map((item) => ({ ...item, hotScore: viralScore(item) }))
-    .sort((a, b) => b.hotScore - a.hotScore);
-  const selected = scored[0];
-  return {
-    provider: "fallback",
-    model: "heuristic",
-    selectedId: selected?.id,
-    hotScore: selected?.hotScore || 0,
-    reason,
-    angle: selected?.summary || selected?.title || "",
-    videoTitle: limitWords(selected?.title || "Tin nong trong ngay", 14),
-    voiceoverScript: fallbackVoiceoverScript(selected),
-    caption: `${selected?.title || "Tin nong trong ngay"}\n\nNguon: ${selected?.sourceName || PRIMARY_SOURCE.name}\n${selected?.link || ""}\n\n#TinTuc #VnExpress #Shorts`,
-    hashtags: ["#TinTuc", "#VnExpress", "#Shorts"],
-    scenes: selected ? buildFallbackScenes(selected) : []
-  };
-}
-
-function fallbackVoiceoverScript(item) {
-  if (!item) return "Cap nhat tin nong trong ngay.";
-  const paragraphs = String(item.articleText || "").split(/\n+/).filter(Boolean);
-  return [
-    item.title,
-    item.summary,
-    ...paragraphs.slice(0, 8)
-  ].filter(Boolean).join("\n\n");
-}
-
-function geminiSchema() {
-  return {
-    type: "object",
-    properties: {
-      selectedId: { type: "string", description: "ID cua tin duoc chon trong danh sach ung vien." },
-      hotScore: { type: "integer", minimum: 0, maximum: 100, description: "Diem nong cua tin." },
-      reason: { type: "string", description: "Ly do chon tin, toi da 2 cau." },
-      angle: { type: "string", description: "Goc ke chuyen cho video chi tiet." },
-      videoTitle: { type: "string", description: "Tieu de upload ngan gon, hap dan, khong qua 90 ky tu." },
-      voiceoverScript: { type: "string", description: "Ban doc voiceover tieng Viet, tom tat day du noi dung bai bao sau khi doc toan bo articleText, bat buoc khoang 170-220 tu." },
-      caption: { type: "string", description: "Caption tieng Viet co nguon va hashtag." },
-      hashtags: {
-        type: "array",
-        items: { type: "string" },
-        minItems: 3,
-        maxItems: 8
-      },
-      scenes: {
-        type: "array",
-        minItems: 6,
-        maxItems: 7,
-        items: {
-          type: "object",
-          properties: {
-            label: { type: "string" },
-            headline: { type: "string" },
-            body: { type: "string" },
-            narration: { type: "string" },
-            visualHint: { type: "string" },
-            mediaIndex: { type: "integer", minimum: 0 },
-            durationSeconds: { type: "integer", minimum: 8, maximum: 13 }
-          },
-          required: ["label", "headline", "body", "narration", "visualHint", "mediaIndex", "durationSeconds"]
-        }
-      }
-    },
-    required: ["selectedId", "hotScore", "reason", "angle", "videoTitle", "voiceoverScript", "caption", "hashtags", "scenes"]
-  };
-}
-
-function geminiPrompt(items) {
-  const candidates = items.map((item) => ({
-    id: item.id,
-    source: item.sourceName,
-    title: item.title,
-    summary: item.summary,
-    category: item.category,
-    pubDate: item.pubDate,
-    link: item.link,
-    articleText: limitWords(item.articleText, 1400),
-    mediaAvailable: {
-      total: item.mediaCandidates?.length || 0,
-      images: item.mediaCandidates?.filter((candidate) => candidate.type === "image").length || 0,
-      videos: item.mediaCandidates?.filter((candidate) => candidate.type === "video").length || 0
-    }
-  }));
-  return `Ban la bien tap vien video tin tuc tieng Viet. Hay chon 1 tin dang hot nhat trong danh sach de lam video doc 60-90 giay.
-
-Tieu chi chon: moi, tac dong rong, de gay chu y, co so lieu/nhan vat/su kien manh, phu hop Shorts/Reels/TikTok. Khong chon tin chi vi gay soc neu thieu tac dong.
-
-Sau khi chon, doc ky toan bo articleText cua tin duoc chon roi viet voiceoverScript rieng cho giong doc. VoiceoverScript phai tom tat day du dien bien, nguyen nhan/boi canh, chi tiet dang chu y va tinh trang tiep theo neu co. Viet nhu mot ban tin doc lien mach 60-90 giay, bat buoc khoang 170-220 tu, khong chia canh, khong copy nguyen van dai tu bai bao, khong them thong tin ngoai nguon.
-
-Sau do viet kich ban 6-7 canh de dieu khien media. Moi canh chi can tom tat ngan bang loi cua minh. Uu tien noi dung chinh xac voi nguon da cung cap. Caption phai co nguon va link cua tin duoc chon.
-
-Moi canh chon mediaIndex tu media goc da co san cua bai. Neu co video, mediaIndex 0 se la video dau tien; uu tien dung video cho canh mo dau va cac canh dien bien manh. Neu so media it hon so canh, co the lap lai mediaIndex. Khong yeu cau tao anh moi.
-
-Danh sach ung vien:
-${JSON.stringify(candidates, null, 2)}`;
-}
-
-function extractGeminiJson(response) {
-  const text = response?.candidates?.[0]?.content?.parts?.map((part) => part.text || "").join("") || "";
-  const clean = text.trim().replace(/^```json\s*/i, "").replace(/^```\s*/i, "").replace(/\s*```$/i, "");
-  return JSON.parse(clean);
-}
-
-async function selectWithGemini(items) {
-  if (!GEMINI_API_KEY) {
-    return fallbackSelection(items, "Missing GEMINI_API_KEY");
-  }
-  const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(GEMINI_MODEL)}:generateContent`;
-  const body = {
-    contents: [{ parts: [{ text: geminiPrompt(items) }] }],
-    generationConfig: {
-      temperature: 0.35,
-      responseMimeType: "application/json",
-      responseJsonSchema: geminiSchema()
-    }
-  };
-
-  for (let attempt = 1; attempt <= 2; attempt += 1) {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "x-goog-api-key": GEMINI_API_KEY,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(body)
-      });
-      const json = await response.json();
-      if (!response.ok) throw new Error(`Gemini HTTP ${response.status}: ${JSON.stringify(json).slice(0, 800)}`);
-      const selection = extractGeminiJson(json);
-      if (!items.some((item) => item.id === selection.selectedId)) {
-        throw new Error(`Gemini selected unknown id: ${selection.selectedId}`);
-      }
-      return normalizeSelection({
-        ...selection,
-        provider: "gemini",
-        model: GEMINI_MODEL,
-        rawResponse: json
-      });
-    } catch (error) {
-      if (attempt === 2) {
-        console.warn(`[gemini] Loi Gemini, dung fallback: ${error.message}`);
-        return fallbackSelection(items, `Gemini error: ${error.message}`);
-      }
-      console.warn(`[gemini] Thu lai lan ${attempt + 1}: ${error.message}`);
-    }
-  }
-  return fallbackSelection(items, "Gemini retry exhausted");
-}
-
-function normalizeSelection(selection) {
-  const scenes = Array.isArray(selection.scenes) ? selection.scenes : [];
-  const normalizedScenes = scenes.slice(0, 7).map((scene, index) => ({
-    label: limitWords(scene.label || `Canh ${index + 1}`, 4).toUpperCase(),
-    headline: limitWords(scene.headline || "", 16),
-    body: limitWords(scene.body || scene.narration || "", 42),
-    narration: limitWords(scene.narration || scene.body || scene.headline || "", 55),
-    visualHint: scene.visualHint || "news-photo",
-    mediaIndex: Number.isInteger(scene.mediaIndex) ? scene.mediaIndex : (Number.isInteger(scene.imageIndex) ? scene.imageIndex : index),
-    imageIndex: Number.isInteger(scene.imageIndex) ? scene.imageIndex : index,
-    durationSeconds: Math.max(8, Math.min(13, Number(scene.durationSeconds) || 10))
-  }));
-  return {
-    ...selection,
-    hotScore: Math.max(0, Math.min(100, Number(selection.hotScore) || 0)),
-    videoTitle: limitWords(selection.videoTitle || "Tin nong trong ngay", 16),
-    voiceoverScript: limitTextByWords(selection.voiceoverScript, 240),
-    caption: selection.caption || "",
-    hashtags: Array.isArray(selection.hashtags) ? selection.hashtags.slice(0, 8) : ["#TinTuc", "#Shorts"],
-    scenes: normalizedScenes.length >= 6 ? normalizedScenes : []
-  };
-}
-
 function ensureSceneDurations(scenes) {
-  const normalized = scenes.length >= 6 ? scenes : [];
-  const base = normalized.length ? normalized : buildFallbackScenes({ title: "Tin nong trong ngay", summary: "Cap nhat dien bien moi nhat." });
+  if (!Array.isArray(scenes) || scenes.length < 6) throw new Error("Gemini must return at least 6 validated scenes.");
+  const base = scenes;
   const contentTarget = Math.max(MIN_DURATION - OUTRO_SECONDS, Math.min(MAX_DURATION - OUTRO_SECONDS, TARGET_DURATION - OUTRO_SECONDS));
   const current = base.reduce((sum, scene) => sum + scene.durationSeconds, 0);
   if (current >= MIN_DURATION - OUTRO_SECONDS && current <= MAX_DURATION - OUTRO_SECONDS) return base;
@@ -1224,13 +997,10 @@ function pythonCommand() {
 }
 
 function storyNarrationText(story, selection, scenes) {
-  if (selection?.voiceoverScript) return limitTextByWords(selection.voiceoverScript, 240);
-  return [
-    story.hook || story.title,
-    story.summary,
-    story.articleText,
-    ...scenes.map((scene) => scene.narration || scene.body || scene.headline)
-  ].filter(Boolean).join("\n\n");
+  if (!selection?.voiceoverScript) {
+    throw new Error("Validated Gemini voiceoverScript is required; raw article fallback is disabled.");
+  }
+  return selection.voiceoverScript;
 }
 
 async function synthesizeStoryTts(story, selection, scenes, assetDir, maxSeconds) {
@@ -1630,6 +1400,8 @@ async function main() {
   const outDir = path.resolve("outputs", "hot-story", now.date, slot);
   const assetDir = path.join(outDir, "assets");
   await mkdir(outDir, { recursive: true });
+  await mkdir(assetDir, { recursive: true });
+  const aiConfig = resolveAiConfig(process.env);
   const manualArticle = parseManualArticleUrl(HOT_STORY_FORCE_URL);
 
   if (window && !manualArticle) {
@@ -1689,29 +1461,19 @@ async function main() {
   const normalizedCandidates = candidates.slice(0, CANDIDATE_COUNT).map((item, index) => ({
     ...item,
     index: index + 1,
-    id: item.id || `${item.sourceKey}-${index + 1}`,
+    originalId: item.id,
+    id: `candidate-${index + 1}`,
     hotScore: viralScore(item)
   }));
 
-  const selection = await selectWithGemini(normalizedCandidates);
-  let story = normalizedCandidates.find((item) => item.id === selection.selectedId);
+  const selection = await selectWithAi(normalizedCandidates, NEWS_SOURCES, { config: aiConfig });
+  const story = normalizedCandidates.find((item) => item.id === selection.selectedId);
   if (!story) {
-    const fallback = fallbackSelection(normalizedCandidates, "Selected id not found after validation");
-    story = normalizedCandidates.find((item) => item.id === fallback.selectedId) || normalizedCandidates[0];
-    Object.assign(selection, fallback);
-  }
-  story = {
-    ...story,
-    mediaCandidates: prioritizeVideoMedia(story.mediaCandidates || [])
-  };
-  if (!selection.voiceoverScript) {
-    selection.voiceoverScript = fallbackVoiceoverScript(story);
+    throw new Error(`Validated Gemini selection references an unknown story: ${selection.selectedId}`);
   }
 
-  let scenes = ensureSceneDurations(selection.scenes.length >= 6 ? selection.scenes : buildFallbackScenes(story));
+  let scenes = ensureSceneDurations(selection.scenes);
   scenes = assignSceneTimings(scenes);
-  const { media: downloadedMedia, errors: mediaDownloadErrors } = await downloadStoryMedia(story, assetDir);
-  const media = prioritizeVideoMedia(downloadedMedia);
   const contentSeconds = scenes.reduce((sum, scene) => sum + scene.durationSeconds, 0);
   const totalSeconds = contentSeconds + OUTRO_SECONDS;
   const ttsResult = await synthesizeStoryTts(story, selection, scenes, assetDir, contentSeconds);
@@ -1744,14 +1506,10 @@ async function main() {
       hashtags: selection.hashtags
     },
     selectedStory: story,
-    media,
-    images: media.filter((item) => item.type === "image").map((item) => ({
-      sourceUrl: item.sourceUrl,
-      localImage: item.localImage || item.localMedia,
-      caption: item.caption,
-      origin: item.origin
-    })),
-    mediaDownloadErrors,
+    media: [],
+    images: [],
+    mediaDownloadErrors: [],
+    visualSource: "hyperframes-code-native",
     scenes,
     narrationAudio,
     candidates: normalizedCandidates.map((item) => ({
@@ -1777,7 +1535,21 @@ async function main() {
     }
   };
 
-  const html = renderComposition({ story, selection, scenes, media, totalSeconds, narrationAudio });
+  const html = renderHotStoryComposition({
+    selection,
+    scenes,
+    totalSeconds,
+    narrationAudio,
+    publicDate: formatPubDate(story.pubDate),
+    width: WIDTH,
+    height: HEIGHT,
+    fps: FPS,
+    outroSeconds: OUTRO_SECONDS,
+    transitionSeconds: TRANSITION_SECONDS,
+    watermark: WATERMARK,
+    backgroundVolume: narrationAudio ? BACKGROUND_VOLUME_WITH_TTS : BACKGROUND_VOLUME,
+    narrationVolume: HOOK_TTS_VOLUME
+  });
   await writeFile(path.join(outDir, "index.html"), html, "utf8");
   await writeFile(path.join(outDir, "news.json"), JSON.stringify(metadata, null, 2), "utf8");
   await writeFile(path.join(outDir, "hot-story-selection.json"), JSON.stringify(metadata.selection, null, 2), "utf8");
@@ -1790,7 +1562,7 @@ async function main() {
     console.warn(`[audio] Khong tim thay background audio: ${BACKGROUND_AUDIO}. Bo qua vi dang --skip-render.`);
   }
 
-  const caption = selection.caption || `${selection.videoTitle}\n\nNguon: ${story.sourceName}\n${story.link}`;
+  const caption = selection.caption;
   await writeCaption(outDir, caption);
 
   let output = path.join(outDir, "final.mp4");

@@ -147,13 +147,23 @@ HF_TOKEN=
 
 ## Commands
 
-## Video chi tiết 1 tin hot nhất bằng Gemini
+## Video chi tiết 1 tin hot nhất bằng Vertex AI hoặc Gemini
 
-Luồng mới tạo video dọc `1080x1920` khoảng `60-90s`, chỉ chọn 1 tin hot nhất trong các tin quét được. Gemini sẽ chấm tin và sinh kịch bản 6-7 cảnh; media ưu tiên lấy từ RSS và chính trang báo: ảnh, GIF, video embed hoặc `VideoObject` JSON-LD. Nếu chưa cấu hình `GEMINI_API_KEY`, script tự fallback sang chấm điểm heuristic để vẫn tạo được metadata/video.
+Luồng này tạo video dọc `1080x1920` khoảng `60-90s`, chọn 1 tin đáng chú ý nhất và dùng model Gemini qua Vertex AI hoặc Gemini Developer API để viết lại thành bản tin độc lập 6-7 cảnh. Nội dung công khai không hiển thị tên báo, URL, phóng viên, byline hoặc hashtag của báo; tên cơ quan, doanh nghiệp và nhân vật thiết yếu của sự kiện vẫn được giữ để bảo đảm rõ nghĩa.
 
-Pipeline không tự generate ảnh khi bài thiếu media. Nếu số media gốc ít hơn số cảnh, video sẽ tái sử dụng media đã tải; nếu bài không có media nào, composition dùng nền tin tức/text-only.
+`HOT_STORY_AI_PROVIDER` nhận `vertex` hoặc `gemini`, mặc định là `vertex`. Provider được chọn thiếu credential, gọi lỗi hoặc vẫn trả về nội dung chứa dấu vết nguồn sau lần sửa lại thì job dừng trước render/upload và không cập nhật trạng thái chống trùng; pipeline không tự chuyển sang provider còn lại.
+
+Flow `hot-story` không tải hoặc sử dụng ảnh, GIF hay video từ bài gốc. Mỗi cảnh được tự dựng bằng component HTML/CSS/SVG trong HyperFrames, gồm kinetic headline, stat card, bar chart, timeline, comparison, process và key-points. Biểu đồ chỉ được dùng khi dữ kiện đầu vào có số liệu phù hợp.
 
 ```env
+# Mặc định: Vertex AI + Application Default Credentials
+HOT_STORY_AI_PROVIDER=vertex
+VERTEX_PROJECT_ID=your-google-cloud-project
+VERTEX_LOCATION=us-central1
+VERTEX_MODEL=gemini-2.5-flash
+
+# Chuyển về Gemini Developer API khi cần
+# HOT_STORY_AI_PROVIDER=gemini
 GEMINI_API_KEY=your-gemini-api-key
 GEMINI_MODEL=gemini-2.5-flash
 HOT_STORY_CANDIDATE_COUNT=12
@@ -161,7 +171,9 @@ HOT_STORY_DURATION_TARGET=75
 HOT_STORY_FORCE_URL=
 ```
 
-`HOT_STORY_FORCE_URL` là tuỳ chọn để ép generate từ một URL bài báo cụ thể khi test/debug. Video `.m3u8` sẽ được FFmpeg tải/chuyển thành MP4 trong `assets/story-video-XX.mp4`.
+Vertex AI dùng Application Default Credentials. Khi chạy local, đăng nhập bằng `gcloud auth application-default login` hoặc đặt `GOOGLE_APPLICATION_CREDENTIALS`. Trên GitHub Actions, workflow dùng Workload Identity Federation qua `google-github-actions/auth`; cấu hình các repository variables `VERTEX_PROJECT_ID`, `VERTEX_LOCATION`, `VERTEX_MODEL`, `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` và cấp `roles/aiplatform.user` cho service account. Đổi repository variable `HOT_STORY_AI_PROVIDER` thành `gemini` để bỏ qua bước Vertex auth và dùng `GEMINI_API_KEY`.
+
+`HOT_STORY_FORCE_URL` là tuỳ chọn để ép generate từ một URL bài báo cụ thể khi test/debug. URL chỉ dùng nội bộ để thu thập và truy vết; nó không xuất hiện trong video, voiceover hoặc caption.
 
 Chạy local với một bài báo HTTPS cụ thể:
 
@@ -194,7 +206,7 @@ npm run hotstory:upload
 npm run hotstory:upload:dry-run
 ```
 
-Output nằm tại `outputs/hot-story/YYYY-MM-DD/HHMM/`, gồm `index.html`, `news.json`, `hot-story-selection.json`, `caption.txt`, media gốc đã tải trong `assets/`, và `final.mp4` nếu render.
+Output nằm tại `outputs/hot-story/YYYY-MM-DD/HHMM/`, gồm `index.html`, `news.json`, `hot-story-selection.json`, `caption.txt`, audio TTS/nhạc nền trong `assets/`, và `final.mp4` nếu render. `news.json` vẫn giữ provenance nội bộ để truy vết và chống trùng; dữ liệu này không được đưa vào đầu ra đăng mạng xã hội.
 
 ### macOS / Linux
 

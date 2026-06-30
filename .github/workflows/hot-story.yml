@@ -28,12 +28,16 @@ concurrency:
   group: hot-story-pipeline
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 jobs:
   generate-and-upload:
     name: "Hot Story (${{ github.event.inputs.slot || 'auto' }})"
     runs-on: ubuntu-latest
     timeout-minutes: 90
     env:
+      HOT_STORY_AI_PROVIDER: ${{ vars.HOT_STORY_AI_PROVIDER || 'vertex' }}
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
       PUPPETEER_SKIP_CHROMIUM_DOWNLOAD: "true"
       CHROME_FLAGS: "--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-gpu --disable-software-rasterizer --font-render-hinting=none"
@@ -41,6 +45,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud for Vertex AI
+        if: env.HOT_STORY_AI_PROVIDER == 'vertex'
+        uses: google-github-actions/auth@v3
+        with:
+          credentials_json: ${{ secrets.GCP_SERVICE_ACCOUNT_KEY }}
 
       - name: Prepare dedupe state directory
         run: mkdir -p .vnexpress-state
@@ -60,6 +70,10 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: "22"
+          cache: "npm"
+
+      - name: Install Node dependencies
+        run: npm ci
 
       - name: Setup Python for VieNeu TTS
         uses: actions/setup-python@v5
@@ -168,6 +182,9 @@ jobs:
           UPLOAD_ENABLED: "true"
           VNEXPRESS_DEDUPE_STATE: ".vnexpress-state/seen-news.json"
           HYPERFRAMES_QUALITY: "draft"
+          VERTEX_PROJECT_ID: ${{ vars.VERTEX_PROJECT_ID }}
+          VERTEX_LOCATION: ${{ vars.VERTEX_LOCATION || 'us-central1' }}
+          VERTEX_MODEL: ${{ vars.VERTEX_MODEL || 'gemini-2.5-flash' }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           GEMINI_MODEL: ${{ secrets.GEMINI_MODEL || 'gemini-2.5-flash' }}
           HOT_STORY_CANDIDATE_COUNT: ${{ secrets.HOT_STORY_CANDIDATE_COUNT || '12' }}

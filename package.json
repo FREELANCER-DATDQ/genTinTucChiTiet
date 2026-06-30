@@ -22,5 +22,8 @@
     "hotstory:noon": "node scripts/hot-story-video.mjs --slot 1200",
     "hotstory:evening": "node scripts/hot-story-video.mjs --slot 2000",
     "hotstory:upload:dry-run": "node scripts/hot-story-video.mjs --skip-render --dry-run-upload"
+  },
+  "dependencies": {
+    "@google/genai": "^2.10.0"
   }
 }

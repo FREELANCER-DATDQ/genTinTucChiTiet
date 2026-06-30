@@ -3,6 +3,7 @@ outputs/
 tools/
 node.exe
 node_modules/
+gha-creds-*.json
 .venv*/
 # Nhạc nền (file cá nhân, không commit lên repo)
 assets/*.mp3
